@@ -84,3 +84,49 @@ new SelectList(Enum.GetValues(typeof(Color))), "Choose a Color")
 </body>
 </html>
 ```
+
+
+## 
+```cs
+
+```
+
+
+### The Contents of the Global.asax.cs File
+```cs
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Web;
+using System.Web.Mvc;
+using System.Web.Routing;
+namespace SimpleApp {
+	public class MvcApplication : System.Web.HttpApplication {
+		protected void Application_Start() {
+			AreaRegistration.RegisterAllAreas();
+			RouteConfig.RegisterRoutes(RouteTable.Routes);
+		}
+	}
+}
+```
+
+
+
+### Breaking the Debugger in the Global.asax.cs File
+```cs
+
+namespace SimpleApp {
+	public class MvcApplication : System.Web.HttpApplication {
+		protected void Application_Start() {
+			AreaRegistration.RegisterAllAreas();
+			RouteConfig.RegisterRoutes(RouteTable.Routes);
+			System.Diagnostics.Debugger.Break();
+		}
+		
+		protected void Application_End() {
+			System.Diagnostics.Debugger.Break();
+		}
+	}
+}
+
+```
