@@ -50,7 +50,7 @@ namespace SimpleApp.Controllers {
 }
 ```
 
-```aspx-cs
+```aspx
 @using SimpleApp.Models
 @{ Layout = null; }
 <!DOCTYPE html>
