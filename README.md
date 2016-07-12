@@ -1169,3 +1169,272 @@ namespace ConfigFiles.Controllers {
 }
 ```
 
+## State Data
+
+```cs
+//Gaining Exclusive Access to the Application State Data in the AppStateHelper.cs File
+using System;
+using System.Web;
+using System.Collections.Generic;
+
+namespace StateData.Infrastructure {
+	public enum AppStateKeys {
+		COUNTER,
+		LAST_REQUEST_TIME,
+		LAST_REQUEST_URL
+	};
+
+		
+	public static class AppStateHelper {
+		public static object Get(AppStateKeys key, object defaultValue = null) {
+			string keyString = Enum.GetName(typeof(AppStateKeys), key);
+			if (HttpContext.Current.Application[keyString] == null
+				&& defaultValue != null) {
+			HttpContext.Current.Application[keyString] = defaultValue;
+			}
+		return HttpContext.Current.Application[keyString];
+	}
+	
+	public static object Set(AppStateKeys key, object value) {
+		return HttpContext.Current.Application[Enum.GetName(typeof(AppStateKeys),key)] = value;
+	}
+	
+	public static IDictionary<AppStateKeys, object>
+		GetMultiple(params AppStateKeys[] keys) {
+	
+		Dictionary<AppStateKeys, object> results = new Dictionary<AppStateKeys, object>();
+		HttpApplicationState appState = HttpContext.Current.Application;
+		appState.Lock();
+	
+		foreach (AppStateKeys key in keys) {
+			string keyString = Enum.GetName(typeof(AppStateKeys), key);
+			results.Add(key, appState[keyString]);
+		}
+		
+		appState.UnLock();
+		return results;
+	}
+	
+	public static void SetMultiple(IDictionary<AppStateKeys, object> data) {
+		HttpApplicationState appState = HttpContext.Current.Application;
+		appState.Lock();
+		foreach (AppStateKeys key in data.Keys) {
+			string keyString = Enum.GetName(typeof(AppStateKeys), key);
+			appState[keyString] = data[key];
+		}
+			appState.UnLock();
+		}
+	}
+}
+```
+
+### Working with Session Data
+
+```cs
+//The Contents of the RegistrationController.cs File
+using System.Web.Mvc;
+namespace StateData.Controllers {
+	public class RegistrationController : Controller {
+		public ActionResult Index() {
+			return View();
+		}
+		
+		[HttpPost]
+		public ActionResult ProcessFirstForm(string name) {
+			System.Diagnostics.Debug.WriteLine("Name: {0}", (object)name);
+			return View("SecondForm");
+		}
+		
+		[HttpPost]
+		public ActionResult CompleteForm(string country) {
+			System.Diagnostics.Debug.WriteLine("Country: {0}", (object)country);
+			// in a real application, this is where the call to create the
+			// new user account would be
+			ViewBag.Name = "<Unknown>";
+			ViewBag.Country = country;
+			return View();
+		}
+	}
+}
+```
+
+```aspx
+//The Contents of the CompleteForm.cshtml File
+@{ Layout = null; }
+<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width" />
+	<title>Finished</title>
+	<link href="~/Content/bootstrap.min.css" rel="stylesheet" />
+	<link href="~/Content/bootstrap-theme.min.css" rel="stylesheet" />
+	<style>body { padding-top: 10px; }</style>
+</head>
+<body class="container">
+	<div class="panel panel-default">
+		<div class="panel-heading">Registration Details</div>
+		<table class="table table-striped">
+			<tr><th>Name</th><td>@ViewBag.Name</td></tr>
+			<tr><th>Country</th><td>@ViewBag.Country</td></tr>
+		</table>
+	</div>
+</body>
+</html>
+```
+
+### Using Session State Data
+```cs
+//The Contents of the SessionStateHelper.cs File
+using System;
+using System.Web;
+namespace StateData.Infrastructure {
+	public enum SessionStateKeys {
+		NAME
+	}
+	
+	public static class SessionStateHelper {
+		public static object Get(SessionStateKeys key) {
+			string keyString = Enum.GetName(typeof(SessionStateKeys), key);
+			return HttpContext.Current.Session[keyString];
+		}
+		
+		public static object Set(SessionStateKeys key, object value) {
+			string keyString = Enum.GetName(typeof(SessionStateKeys), key);
+			return HttpContext.Current.Session[keyString] = value;
+		}
+	}
+}
+```
+
+
+```cs
+Using Session State Data in the RegistrationController.cs File
+using System.Web.Mvc;
+using StateData.Infrastructure;
+namespace StateData.Controllers {
+	public class RegistrationController : Controller {
+
+		public ActionResult Index() {
+			return View();
+		}
+		
+		[HttpPost]
+		public ActionResult ProcessFirstForm(string name) {
+			SessionStateHelper.Set(SessionStateKeys.NAME, name);
+			return View("SecondForm");
+		}
+		
+		[HttpPost]
+		public ActionResult CompleteForm(string country) {
+			ViewBag.Name = SessionStateHelper.Get(SessionStateKeys.NAME);
+			ViewBag.Country = country;
+			return View();
+			}
+	}
+}
+```
+
+```cs
+//Understanding How Sessions Work
+//The Contents of the LifecycleController.cs File
+using System.Web;
+using System.Web.Mvc;
+using StateData.Infrastructure;
+namespace StateData.Controllers {
+	public class LifecycleController : Controller {
+		public ActionResult Index() {
+			return View();
+		}
+		
+		[HttpPost]
+		public ActionResult Index(bool store = false, bool abandon = false) {
+			if (store) {
+				SessionStateHelper.Set(SessionStateKeys.NAME, "Adam");
+			}
+			if (abandon) {
+				Session.Abandon();
+			}
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+```cs
+//Contents of the Index.cshtml File in the /Views/Lifecycle Folder
+@{ Layout = null; }
+<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width" />
+	<title>Session Lifecycle</title>
+	<link href="~/Content/bootstrap.min.css" rel="stylesheet" />
+	<link href="~/Content/bootstrap-theme.min.css" rel="stylesheet" />
+	<style> body { padding-top: 10px; } </style>
+</head>
+<body class="container">
+	<div class="panel panel-primary">
+		<div class="panel-heading">Session</div>
+		<table class="table">
+			<tr><th>Session ID</th><td>@Session.SessionID</td></tr>
+			<tr><th>Is New?</th><td>@Session.IsNewSession</td></tr>
+			<tr><th>State Data Count</th><td>@Session.Count</td></tr>
+		</table>
+	</div>
+	@using(Html.BeginForm()) {
+	<div class="checkbox">
+		<label>
+		@Html.CheckBox("store") Store State Data</label>
+	</div>
+	
+	<div class="checkbox">
+		<label>
+		@Html.CheckBox("abandon") Abandon Session</label>
+	</div>
+	<button class="btn btn-primary" type="submit">Submit</button>
+	}
+</body>
+</html>
+```
+
+### Configuring Sessions and Session State
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+	<system.web>
+		<sessionState cookieless="UseUri" />
+	</system.web>
+</configuration>
+```
+
+### Using the State Server
+```xml
+Configuring the State Server in the Web.config File
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+	<system.web>
+		<sessionState cookieless="UseCookies" mode="StateServer" stateConnectionString="tcpip=localhost:42424" />
+	</system.web>
+</configuration>
+```
+
+### Using a SQL Database
+```xml
+Configuring the Universal Provider for Session Data in the Web.config File
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+	<connectionStrings>
+		<add name="StateDb" providerName="System.Data.SqlClient"
+			connectionString="Data Source=(localdb)\v11.0;Initial Catalog=StateDb;	Integrated Security=True" />
+	</connectionStrings>
+
+	<sessionState mode="Custom" customProvider="DefaultSessionProvider">
+		<providers>
+			<add name="DefaultSessionProvider" connectionStringName="StateDb" 	type="System.Web.Providers.DefaultSessionStateProvider,
+				System.Web.Providers, Version=2.0.0.0, Culture=neutral,	PublicKeyToken=31bf3856ad364e35" />
+		</providers>
+	</sessionState>
+</system.web>
+</configuration>
+```
