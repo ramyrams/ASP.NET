@@ -1939,3 +1939,993 @@ namespace ContentCache.Controllers {
 	}
 }
 ```
+
+
+## ASP.NET Identity
+
+```cs
+//IdentityConfig.cs
+using Microsoft.AspNet.Identity;
+using Microsoft.Owin;
+using Microsoft.Owin.Security.Cookies;
+using Owin;
+using Users.Infrastructure;
+using Microsoft.Owin.Security.Google;
+
+namespace Users {
+    public class IdentityConfig {
+        public void Configuration(IAppBuilder app) {
+
+            app.CreatePerOwinContext<AppIdentityDbContext>(AppIdentityDbContext.Create);
+            app.CreatePerOwinContext<AppUserManager>(AppUserManager.Create);
+            app.CreatePerOwinContext<AppRoleManager>(AppRoleManager.Create);
+
+            app.UseCookieAuthentication(new CookieAuthenticationOptions {
+                AuthenticationType = DefaultAuthenticationTypes.ApplicationCookie,
+                LoginPath = new PathString("/Account/Login"),
+            });
+
+            app.UseExternalSignInCookie(DefaultAuthenticationTypes.ExternalCookie);
+            app.UseGoogleAuthentication();
+        }
+    }
+}
+```
+
+```cs
+//AccountController.cs
+
+using System.Threading.Tasks;
+using System.Web.Mvc;
+using Users.Models;
+using Microsoft.Owin.Security;
+using System.Security.Claims;
+using Microsoft.AspNet.Identity;
+using Microsoft.AspNet.Identity.Owin;
+using Users.Infrastructure;
+using System.Web;
+
+namespace Users.Controllers {
+
+    [Authorize]
+    public class AccountController : Controller {
+
+        [AllowAnonymous]
+        public ActionResult Login(string returnUrl) {
+            if (HttpContext.User.Identity.IsAuthenticated) {
+                return View("Error", new string[] { "Access Denied" });
+            }
+            ViewBag.returnUrl = returnUrl;
+            return View();
+        }
+
+        [HttpPost]
+        [AllowAnonymous]
+        [ValidateAntiForgeryToken]
+        public async Task<ActionResult> Login(LoginModel details, string returnUrl) {
+            if (ModelState.IsValid) {
+                AppUser user = await UserManager.FindAsync(details.Name,
+                    details.Password);
+                if (user == null) {
+                    ModelState.AddModelError("", "Invalid name or password.");
+                } else {
+                    ClaimsIdentity ident = await UserManager.CreateIdentityAsync(user,
+                        DefaultAuthenticationTypes.ApplicationCookie);
+                    ident.AddClaims(LocationClaimsProvider.GetClaims(ident));
+                    ident.AddClaims(ClaimsRoles.CreateRolesFromClaims(ident));
+                    AuthManager.SignOut();
+                    AuthManager.SignIn(new AuthenticationProperties {
+                        IsPersistent = false
+                    }, ident);
+                    return Redirect(returnUrl);
+                }
+            }
+            ViewBag.returnUrl = returnUrl;
+            return View(details);
+        }
+
+        [HttpPost]
+        [AllowAnonymous]
+        public ActionResult GoogleLogin(string returnUrl) {
+            var properties = new AuthenticationProperties {
+                RedirectUri = Url.Action("GoogleLoginCallback",
+                    new { returnUrl = returnUrl })
+            };
+            HttpContext.GetOwinContext().Authentication.Challenge(properties, "Google");
+            return new HttpUnauthorizedResult();
+        }
+
+        [AllowAnonymous]
+        public async Task<ActionResult> GoogleLoginCallback(string returnUrl) {
+            ExternalLoginInfo loginInfo = await AuthManager.GetExternalLoginInfoAsync();
+            AppUser user = await UserManager.FindAsync(loginInfo.Login);
+            if (user == null) {
+                user = new AppUser {
+                    Email = loginInfo.Email,
+                    UserName = loginInfo.DefaultUserName,
+                    City = Cities.LONDON, Country = Countries.UK
+                };
+                IdentityResult result = await UserManager.CreateAsync(user);
+                if (!result.Succeeded) {
+                    return View("Error", result.Errors);
+                } else {
+                    result = await UserManager.AddLoginAsync(user.Id, loginInfo.Login);
+                    if (!result.Succeeded) {
+                        return View("Error", result.Errors);
+                    }
+                }
+            }
+
+            ClaimsIdentity ident = await UserManager.CreateIdentityAsync(user,
+                DefaultAuthenticationTypes.ApplicationCookie);
+            ident.AddClaims(loginInfo.ExternalIdentity.Claims);
+            AuthManager.SignIn(new AuthenticationProperties {
+                IsPersistent = false
+            }, ident);
+
+            return Redirect(returnUrl ?? "/");
+        }
+
+        [Authorize]
+        public ActionResult Logout() {
+            AuthManager.SignOut();
+            return RedirectToAction("Index", "Home");
+        }
+
+        private IAuthenticationManager AuthManager {
+            get {
+                return HttpContext.GetOwinContext().Authentication;
+            }
+        }
+
+        private AppUserManager UserManager {
+            get {
+                return HttpContext.GetOwinContext().GetUserManager<AppUserManager>();
+            }
+        }
+    }
+}
+```
+
+
+```cs
+//AdminController.cs
+using System.Web;
+using System.Web.Mvc;
+using Microsoft.AspNet.Identity.Owin;
+using Users.Infrastructure;
+using Users.Models;
+using Microsoft.AspNet.Identity;
+using System.Threading.Tasks;
+
+namespace Users.Controllers {
+
+    [Authorize(Roles = "Administrators")]
+    public class AdminController : Controller {
+
+        public ActionResult Index() {
+            return View(UserManager.Users);
+        }
+
+        public ActionResult Create() {
+            return View();
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Create(CreateModel model) {
+            if (ModelState.IsValid) {
+                AppUser user = new AppUser { UserName = model.Name, Email = model.Email };
+                IdentityResult result = await UserManager.CreateAsync(user,
+                    model.Password);
+                if (result.Succeeded) {
+                    return RedirectToAction("Index");
+                } else {
+                    AddErrorsFromResult(result);
+                }
+            }
+            return View(model);
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Delete(string id) {
+            AppUser user = await UserManager.FindByIdAsync(id);
+            if (user != null) {
+                IdentityResult result = await UserManager.DeleteAsync(user);
+                if (result.Succeeded) {
+                    return RedirectToAction("Index");
+                } else {
+                    return View("Error", result.Errors);
+                }
+            } else {
+                return View("Error", new string[] { "User Not Found" });
+            }
+        }
+
+        public async Task<ActionResult> Edit(string id) {
+            AppUser user = await UserManager.FindByIdAsync(id);
+            if (user != null) {
+                return View(user);
+            } else {
+                return RedirectToAction("Index");
+            }
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Edit(string id, string email, string password) {
+            AppUser user = await UserManager.FindByIdAsync(id);
+            if (user != null) {
+                user.Email = email;
+                IdentityResult validEmail
+                    = await UserManager.UserValidator.ValidateAsync(user);
+                if (!validEmail.Succeeded) {
+                    AddErrorsFromResult(validEmail);
+                }
+                IdentityResult validPass = null;
+                if (password != string.Empty) {
+                    validPass
+                        = await UserManager.PasswordValidator.ValidateAsync(password);
+                    if (validPass.Succeeded) {
+                        user.PasswordHash =
+                            UserManager.PasswordHasher.HashPassword(password);
+                    } else {
+                        AddErrorsFromResult(validPass);
+                    }
+                }
+                if ((validEmail.Succeeded && validPass == null) || (validEmail.Succeeded
+                        && password != string.Empty && validPass.Succeeded)) {
+                    IdentityResult result = await UserManager.UpdateAsync(user);
+                    if (result.Succeeded) {
+                        return RedirectToAction("Index");
+                    } else {
+                        AddErrorsFromResult(result);
+                    }
+                }
+            } else {
+                ModelState.AddModelError("", "User Not Found");
+            }
+            return View(user);
+        }
+
+        private void AddErrorsFromResult(IdentityResult result) {
+            foreach (string error in result.Errors) {
+                ModelState.AddModelError("", error);
+            }
+        }
+
+        private AppUserManager UserManager {
+            get {
+                return HttpContext.GetOwinContext().GetUserManager<AppUserManager>();
+            }
+        }
+
+    }
+}
+```
+
+```cs
+//ClaimsController.cs
+using System.Security.Claims;
+using System.Web;
+using System.Web.Mvc;
+using Users.Infrastructure;
+
+namespace Users.Controllers {
+    public class ClaimsController : Controller {
+
+        [Authorize]
+        public ActionResult Index() {
+            ClaimsIdentity ident = HttpContext.User.Identity as ClaimsIdentity;
+            if (ident == null) {
+                return View("Error", new string[] { "No claims available" });
+            } else {
+                return View(ident.Claims);
+            }
+        }
+
+        [ClaimsAccess(Issuer = "RemoteClaims", ClaimType = ClaimTypes.PostalCode,
+             Value = "DC 20500")]
+        public string OtherAction() {
+            return "This is the protected action";
+        }
+    }
+}
+```
+
+```cs
+//HomeController.cs
+using System.Web.Mvc;
+using System.Collections.Generic;
+using System.Web;
+using System.Security.Principal;
+using System.Threading.Tasks;
+using Users.Infrastructure;
+using Microsoft.AspNet.Identity;
+using Microsoft.AspNet.Identity.Owin;
+using Users.Models;
+
+namespace Users.Controllers {
+
+    public class HomeController : Controller {
+
+        [Authorize]
+        public ActionResult Index() {
+            return View(GetData("Index"));
+        }
+
+        [Authorize(Roles = "Users")]
+        public ActionResult OtherAction() {
+            return View("Index", GetData("OtherAction"));
+        }
+
+        private Dictionary<string, object> GetData(string actionName) {
+            Dictionary<string, object> dict
+                = new Dictionary<string, object>();
+            dict.Add("Action", actionName);
+            dict.Add("User", HttpContext.User.Identity.Name);
+            dict.Add("Authenticated", HttpContext.User.Identity.IsAuthenticated);
+            dict.Add("Auth Type", HttpContext.User.Identity.AuthenticationType);
+            dict.Add("In Users Role", HttpContext.User.IsInRole("Users"));
+            return dict;
+        }
+
+        [Authorize]
+        public ActionResult UserProps() {
+            return View(CurrentUser);
+        }
+
+        [Authorize]
+        [HttpPost]
+        public async Task<ActionResult> UserProps(Cities city) {
+            AppUser user = CurrentUser;
+            user.City = city;
+            user.SetCountryFromCity(city);
+            await UserManager.UpdateAsync(user);
+            return View(user);
+        }
+
+        private AppUser CurrentUser {
+            get {
+                return UserManager.FindByName(HttpContext.User.Identity.Name);
+            }
+        }
+
+        private AppUserManager UserManager {
+            get {
+                return HttpContext.GetOwinContext().GetUserManager<AppUserManager>();
+            }
+        }
+    }
+}
+```
+
+
+```cs
+//RoleAdminController.cs
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Web;
+using System.Web.Mvc;
+using Microsoft.AspNet.Identity;
+using Microsoft.AspNet.Identity.Owin;
+using Users.Infrastructure;
+using Users.Models;
+
+namespace Users.Controllers {
+
+    [Authorize(Roles = "Administrators")]
+    public class RoleAdminController : Controller {
+
+        public ActionResult Index() {
+            return View(RoleManager.Roles);
+        }
+
+        public ActionResult Create() {
+            return View();
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Create([Required]string name) {
+            if (ModelState.IsValid) {
+                IdentityResult result
+                    = await RoleManager.CreateAsync(new AppRole(name));
+                if (result.Succeeded) {
+                    return RedirectToAction("Index");
+                } else {
+                    AddErrorsFromResult(result);
+                }
+            }
+            return View(name);
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Delete(string id) {
+            AppRole role = await RoleManager.FindByIdAsync(id);
+            if (role != null) {
+                IdentityResult result = await RoleManager.DeleteAsync(role);
+                if (result.Succeeded) {
+                    return RedirectToAction("Index");
+                } else {
+                    return View("Error", result.Errors);
+                }
+            } else {
+                return View("Error", new string[] { "Role Not Found" });
+            }
+        }
+
+        public async Task<ActionResult> Edit(string id) {
+            AppRole role = await RoleManager.FindByIdAsync(id);
+            string[] memberIDs = role.Users.Select(x => x.UserId).ToArray();
+            IEnumerable<AppUser> members
+                = UserManager.Users.Where(x => memberIDs.Any(y => y == x.Id));
+            IEnumerable<AppUser> nonMembers = UserManager.Users.Except(members);
+            return View(new RoleEditModel {
+                Role = role,
+                Members = members,
+                NonMembers = nonMembers
+            });
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> Edit(RoleModificationModel model) {
+            IdentityResult result;
+            if (ModelState.IsValid) {
+                foreach (string userId in model.IdsToAdd ?? new string[] { }) {
+                    result = await UserManager.AddToRoleAsync(userId, model.RoleName);
+                    if (!result.Succeeded) {
+                        return View("Error", result.Errors);
+                    }
+                }
+                foreach (string userId in model.IdsToDelete ?? new string[] { }) {
+                    result = await UserManager.RemoveFromRoleAsync(userId,
+                        model.RoleName);
+                    if (!result.Succeeded) {
+                        return View("Error", result.Errors);
+                    }
+                }
+                return RedirectToAction("Index");
+            }
+            return View("Error", new string[] { "Role Not Found" });
+        }
+
+        private void AddErrorsFromResult(IdentityResult result) {
+            foreach (string error in result.Errors) {
+                ModelState.AddModelError("", error);
+            }
+        }
+
+        private AppUserManager UserManager {
+            get {
+                return HttpContext.GetOwinContext().GetUserManager<AppUserManager>();
+            }
+        }
+
+        private AppRoleManager RoleManager {
+            get {
+                return HttpContext.GetOwinContext().GetUserManager<AppRoleManager>();
+            }
+        }
+    }
+}
+```
+
+
+```cs
+//AppIdentityDbContext.cs
+namespace Users.Infrastructure {
+    public class AppIdentityDbContext : IdentityDbContext<AppUser> {
+
+        public AppIdentityDbContext() : base("IdentityDb") { }
+
+        static AppIdentityDbContext() {
+            Database.SetInitializer<AppIdentityDbContext>(new IdentityDbInit());
+        }
+
+        public static AppIdentityDbContext Create() {
+            return new AppIdentityDbContext();
+        }
+    }
+
+    public class IdentityDbInit : NullDatabaseInitializer<AppIdentityDbContext> {
+    }
+}
+```
+
+```cs
+//AppRoleManager.cs
+namespace Users.Infrastructure {
+
+    public class AppRoleManager : RoleManager<AppRole>, IDisposable {
+
+        public AppRoleManager(RoleStore<AppRole> store)
+            : base(store) {
+        }
+
+        public static AppRoleManager Create(
+                IdentityFactoryOptions<AppRoleManager> options,
+                IOwinContext context) {
+            return new AppRoleManager(new
+                RoleStore<AppRole>(context.Get<AppIdentityDbContext>()));
+        }
+    }
+}
+```
+
+```cs
+//AppUserManager.cs
+namespace Users.Infrastructure {
+    public class AppUserManager : UserManager<AppUser> {
+
+        public AppUserManager(IUserStore<AppUser> store)
+            : base(store) {
+        }
+
+        public static AppUserManager Create(
+                IdentityFactoryOptions<AppUserManager> options,
+                IOwinContext context) {
+
+            AppIdentityDbContext db = context.Get<AppIdentityDbContext>();
+            AppUserManager manager = new AppUserManager(new UserStore<AppUser>(db));
+
+            manager.PasswordValidator = new CustomPasswordValidator {
+                RequiredLength = 6,
+                RequireNonLetterOrDigit = false,
+                RequireDigit = false,
+                RequireLowercase = true,
+                RequireUppercase = true
+            };
+
+            //manager.UserValidator = new CustomUserValidator(manager) {
+            //    AllowOnlyAlphanumericUserNames = true,
+            //    RequireUniqueEmail = true
+            //};
+
+            return manager;
+        }
+    }
+}
+```
+
+```cs
+//ClaimsAccessAttribute.cs
+namespace Users.Infrastructure {
+    public class ClaimsAccessAttribute : AuthorizeAttribute {
+
+        public string Issuer { get; set; }
+        public string ClaimType { get; set; }
+        public string Value { get; set; }
+
+        protected override bool AuthorizeCore(HttpContextBase context) {
+            return context.User.Identity.IsAuthenticated
+                && context.User.Identity is ClaimsIdentity
+                && ((ClaimsIdentity)context.User.Identity).HasClaim(x =>
+                    x.Issuer == Issuer && x.Type == ClaimType && x.Value == Value
+                );
+        }
+    }
+}
+```
+
+```cs
+//ClaimsRoles.cs
+namespace Users.Infrastructure {
+    public class ClaimsRoles {
+
+        public static IEnumerable<Claim> CreateRolesFromClaims(ClaimsIdentity user) {
+            List<Claim> claims = new List<Claim>();
+            if (user.HasClaim(x => x.Type == ClaimTypes.StateOrProvince
+                        && x.Issuer == "RemoteClaims" && x.Value == "DC")
+                    && user.HasClaim(x => x.Type == ClaimTypes.Role
+                        && x.Value == "Employees")) {
+                claims.Add(new Claim(ClaimTypes.Role, "DCStaff"));
+            }
+            return claims;
+        }
+    }
+}
+```
+
+```cs
+//CustomPasswordValidator.cs
+namespace Users.Infrastructure {
+
+    public class CustomPasswordValidator : PasswordValidator {
+        public override async Task<IdentityResult> ValidateAsync(string pass) {
+            IdentityResult result = await base.ValidateAsync(pass);
+            if (pass.Contains("12345")) {
+                var errors = result.Errors.ToList();
+                errors.Add("Passwords cannot contain numeric sequences");
+                result = new IdentityResult(errors);
+            }
+            return result;
+        }
+    }
+}
+```
+
+```cs
+//CustomUserValidator.cs
+namespace Users.Infrastructure {
+
+    public class CustomUserValidator : UserValidator<AppUser> {
+
+        public CustomUserValidator(AppUserManager mgr)
+            : base(mgr) {
+        }
+
+        public override async Task<IdentityResult> ValidateAsync(AppUser user) {
+            IdentityResult result = await base.ValidateAsync(user);
+
+            if (!user.Email.ToLower().EndsWith("@example.com")) {
+                var errors = result.Errors.ToList();
+                errors.Add("Only example.com email addresses are allowed");
+                result = new IdentityResult(errors);
+            }
+            return result;
+        }
+    }
+}
+```
+
+```cs
+//IdentityHelpers.cs
+namespace Users.Infrastructure {
+    public static class IdentityHelpers {
+        public static MvcHtmlString GetUserName(this HtmlHelper html, string id) {
+            AppUserManager mgr
+                = HttpContext.Current.GetOwinContext().GetUserManager<AppUserManager>();
+            return new MvcHtmlString(mgr.FindByIdAsync(id).Result.UserName);
+        }
+
+        public static MvcHtmlString ClaimType(this HtmlHelper html, string claimType) {
+            FieldInfo[] fields = typeof(ClaimTypes).GetFields();
+            foreach (FieldInfo field in fields) {
+                if (field.GetValue(null).ToString() == claimType) {
+                    return new MvcHtmlString(field.Name);
+                }
+            }
+            return new MvcHtmlString(string.Format("{0}",
+                claimType.Split('/', '.').Last()));
+        }
+
+    }
+}
+```
+
+```cs
+//LocationClaimsProvider.cs
+namespace Users.Infrastructure {
+
+    public static class LocationClaimsProvider {
+
+        public static IEnumerable<Claim> GetClaims(ClaimsIdentity user) {
+            List<Claim> claims = new List<Claim>();
+            if (user.Name.ToLower() == "alice") {
+                claims.Add(CreateClaim(ClaimTypes.PostalCode, "DC 20500"));
+                claims.Add(CreateClaim(ClaimTypes.StateOrProvince, "DC"));
+            } else {
+                claims.Add(CreateClaim(ClaimTypes.PostalCode, "NY 10036"));
+                claims.Add(CreateClaim(ClaimTypes.StateOrProvince, "NY"));
+            }
+            return claims;
+        }
+
+        private static Claim CreateClaim(string type, string value) {
+            return new Claim(type, value, ClaimValueTypes.String, "RemoteClaims");
+        }
+    }
+}
+```
+
+
+#### Model
+
+```cs
+//AppRole.cs
+
+namespace Users.Models {
+    public class AppRole : IdentityRole {
+
+        public AppRole() : base() { }
+
+        public AppRole(string name) : base(name) { }
+    }
+}
+```
+
+```cs
+//AppUser.cs
+
+namespace Users.Models {
+
+    public enum Cities {
+        LONDON, PARIS, CHICAGO
+    }
+
+    public enum Countries {
+        NONE, UK, FRANCE, USA
+    }
+
+    public class AppUser : IdentityUser {
+        public Cities City { get; set; }
+        public Countries Country { get; set; }
+
+        public void SetCountryFromCity(Cities city) {
+            switch (city) {
+                case Cities.LONDON:
+                    Country = Countries.UK;
+                    break;
+                case Cities.PARIS:
+                    Country = Countries.FRANCE;
+                    break;
+                case Cities.CHICAGO:
+                    Country = Countries.USA;
+                    break;
+                default:
+                    Country = Countries.NONE;
+                    break;
+            }
+        }
+    }
+}
+```
+
+```cs
+//UserViewModels.cs
+
+namespace Users.Models {
+
+    public class CreateModel {
+        [Required]
+        public string Name { get; set; }
+        [Required]
+        public string Email { get; set; }
+        [Required]
+        public string Password { get; set; }
+    }
+
+    public class LoginModel {
+        [Required]
+        public string Name { get; set; }
+        [Required]
+        public string Password { get; set; }
+    }
+
+    public class RoleEditModel {
+        public AppRole Role { get; set; }
+        public IEnumerable<AppUser> Members { get; set; }
+        public IEnumerable<AppUser> NonMembers { get; set; }
+    }
+
+    public class RoleModificationModel {
+        [Required]
+        public string RoleName { get; set; }
+        public string[] IdsToAdd { get; set; }
+        public string[] IdsToDelete { get; set; }
+    }
+
+}
+```
+
+#### Web.Config
+
+```cs
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <connectionStrings>
+    <add name="IdentityDb" providerName="System.Data.SqlClient" connectionString="Data Source=(localdb)\v11.0;Initial Catalog=IdentityDb;Integrated Security=True;Connect Timeout=15;Encrypt=False;TrustServerCertificate=False; MultipleActiveResultSets=True" />
+  </connectionStrings>
+
+  <appSettings>
+    <add key="owin:AppStartup" value="Users.IdentityConfig" />
+  </appSettings>
+</configuration>
+```
+
+
+#### View
+```aspx
+//Login.cshtml
+@model Users.Models.LoginModel
+@{ ViewBag.Title = "Login";}
+<h2>Log In</h2>
+
+@Html.ValidationSummary()
+
+@using (Html.BeginForm()) {
+    @Html.AntiForgeryToken();
+    <input type="hidden" name="returnUrl" value="@ViewBag.returnUrl" />
+    <div class="form-group">
+        <label>Name</label>
+        @Html.TextBoxFor(x => x.Name, new { @class = "form-control" })
+    </div>
+    <div class="form-group">
+        <label>Password</label>
+        @Html.PasswordFor(x => x.Password, new { @class = "form-control" })
+    </div>
+    <button class="btn btn-primary" type="submit">Log In</button>
+}
+
+@using (Html.BeginForm("GoogleLogin", "Account")) {
+    <input type="hidden" name="returnUrl" value="@ViewBag.returnUrl" />
+    <button class="btn btn-primary" type="submit">Log In via Google</button>
+}
+```
+
+```aspx
+//Create.cshtml
+@model Users.Models.CreateModel
+@{ ViewBag.Title = "Create User";}
+<h2>Create User</h2>
+@Html.ValidationSummary(false)
+@using (Html.BeginForm()) {
+    <div class="form-group">
+        <label>Name</label>
+        @Html.TextBoxFor(x => x.Name, new { @class = "form-control" })
+    </div>
+    <div class="form-group">
+        <label>Email</label>
+        @Html.TextBoxFor(x => x.Email, new { @class = "form-control" })
+    </div>
+    <div class="form-group">
+        <label>Password</label>
+        @Html.PasswordFor(x => x.Password, new { @class = "form-control" })
+    </div>
+    <button type="submit" class="btn btn-primary">Create</button>
+    @Html.ActionLink("Cancel", "Index", null, new { @class = "btn btn-default" })
+}
+```
+
+
+```aspx
+//@model Users.Models.AppUser
+@{ ViewBag.Title = "Edit"; }
+@Html.ValidationSummary(false)
+<h2>Edit User</h2>
+
+<div class="form-group">
+    <label>Name</label>
+    <p class="form-control-static">@Model.Id</p>
+</div>
+@using (Html.BeginForm()) {
+    @Html.HiddenFor(x => x.Id)
+    <div class="form-group">
+        <label>Email</label>
+        @Html.TextBoxFor(x => x.Email, new { @class = "form-control" })
+    </div>
+    <div class="form-group">
+        <label>Password</label>
+        <input name="password" type="password" class="form-control" />
+    </div>
+    <button type="submit" class="btn btn-primary">Save</button>
+    @Html.ActionLink("Cancel", "Index", null, new { @class = "btn btn-default" })
+}
+```
+
+
+```aspx
+Claims\Index.cshtml
+@using System.Security.Claims
+@using Users.Infrastructure
+@model IEnumerable<Claim>
+@{ ViewBag.Title = "Claims"; }
+
+<div class="panel panel-primary">
+    <div class="panel-heading">
+        Claims
+    </div>
+    <table class="table table-striped">
+        <tr>
+            <th>Subject</th>
+            <th>Issuer</th>
+            <th>Type</th>
+            <th>Value</th>
+        </tr>
+        @foreach (Claim claim in Model.OrderBy(x => x.Type)) {
+            <tr>
+                <td>@claim.Subject.Name</td>
+                <td>@claim.Issuer</td>
+                <td>@Html.ClaimType(claim.Type)</td>
+                <td>@claim.Value</td>
+            </tr>
+        }
+    </table>
+</div>
+```
+
+```aspx
+Role\edit.cshtml
+@using Users.Models
+@model RoleEditModel
+@{ ViewBag.Title = "Edit Role";}
+@Html.ValidationSummary()
+@using (Html.BeginForm()) {
+    <input type="hidden" name="roleName" value="@Model.Role.Name" />
+    <div class="panel panel-primary">
+        <div class="panel-heading">Add To @Model.Role.Name</div>
+        <table class="table table-striped">
+            @if (Model.NonMembers.Count() == 0) {
+                <tr><td colspan="2">All Users Are Members</td></tr>
+            } else {
+                <tr><td>User ID</td><td>Add To Role</td></tr>
+                foreach (AppUser user in Model.NonMembers) {
+                    <tr>
+                        <td>@user.UserName</td>
+                        <td>
+                            <input type="checkbox" name="IdsToAdd" value="@user.Id">
+                        </td>
+                    </tr>
+                }
+            }
+        </table>
+    </div>
+    <div class="panel panel-primary">
+        <div class="panel-heading">Remove from @Model.Role.Name</div>
+        <table class="table table-striped">
+            @if (Model.Members.Count() == 0) {
+                <tr><td colspan="2">No Users Are Members</td></tr>
+            } else {
+                <tr><td>User ID</td><td>Remove From Role</td></tr>
+                foreach (AppUser user in Model.Members) {
+                    <tr>
+                        <td>@user.UserName</td>
+                        <td>
+                            <input type="checkbox" name="IdsToDelete" value="@user.Id">
+                        </td>
+                    </tr>
+                }
+            }
+        </table>
+    </div>
+    <button type="submit" class="btn btn-primary">Save</button>
+    @Html.ActionLink("Cancel", "Index", null, new { @class = "btn btn-default" })
+}
+```
+
+```aspx
+Role\Index.cshtml
+@using Users.Models
+@using Users.Infrastructure
+@model IEnumerable<AppRole>
+@{ ViewBag.Title = "Roles"; }
+<div class="panel panel-primary">
+    <div class="panel-heading">Roles</div>
+    <table class="table table-striped">
+        <tr><th>ID</th><th>Name</th><th>Users</th><th></th></tr>
+        @if (Model.Count() == 0) {
+            <tr><td colspan="4" class="text-center">No Roles</td></tr>
+        } else {
+            foreach (AppRole role in Model) {
+                <tr>
+                    <td>@role.Id</td>
+                    <td>@role.Name</td>
+                    <td>
+                        @if (role.Users == null || role.Users.Count == 0) {
+                            @: No Users in Role
+                        } else {
+                            <p>
+                                @string.Join(", ", role.Users.Select(x =>
+                                Html.GetUserName(x.UserId)))
+                        </p>
+                        }
+                    </td>
+                    <td>
+                        @using (Html.BeginForm("Delete", "RoleAdmin",
+                            new { id = role.Id })) {
+                            @Html.ActionLink("Edit", "Edit", new { id = role.Id },
+                                    new { @class = "btn btn-primary btn-xs" })
+                            <button class="btn btn-danger btn-xs"
+                                    type="submit">
+                                Delete
+                            </button>
+                        }
+                    </td>
+                </tr>
+            }
+        }
+    </table>
+</div>
+@Html.ActionLink("Create", "Create", null, new { @class = "btn btn-primary" })
+```
+
