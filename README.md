@@ -1438,3 +1438,504 @@ Configuring the Universal Provider for Session Data in the Web.config File
 </system.web>
 </configuration>
 ```
+
+## Caching Data
+
+### Using Basic Caching
+
+```cs
+//Using the Cache in the CacheController.cs File
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Web;
+using System.Web.Mvc;
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		public ActionResult Index() {
+			return View((long?)(HttpContext.Cache["pageLength"]));
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result 	= await new HttpClient().GetAsync("http://apress.com");
+			HttpContext.Cache["pageLength"] = result.Content.Headers.ContentLength;
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+### Configuring the Cache
+
+```xml
+//Configuring the Cache in the Web.config File
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+	<caching>
+		<cache percentagePhysicalMemoryUsedLimit="10" />
+	</caching>
+</configuration>
+```
+
+### Using Absolute Time Expiration
+```cs
+Expiring Cache Items in the CacheController.cs File
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Web;
+using System.Web.Mvc;
+using System.Web.Caching;
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		public ActionResult Index() {
+		return View((long?)(HttpContext.Cache["pageLength"]));
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result 		= await new HttpClient().GetAsync("http://apress.com");
+			long? data = result.Content.Headers.ContentLength;
+
+			DateTime expiryTime = DateTime.Now.AddSeconds(30);
+			HttpContext.Cache.Insert("pageLength", data, null, expiryTime,
+			Cache.NoSlidingExpiration);
+
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+### Using Sliding Time Expirations
+
+```cs
+//Using a Sliding Expiration in the CacheController.cs File
+using System.Web.Caching;
+
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		public ActionResult Index() {
+			return View((long?)(HttpContext.Cache["pageLength"]));
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+		HttpResponseMessage result 		= await new HttpClient().GetAsync("http://apress.com");
+		long? data = result.Content.Headers.ContentLength;
+		TimeSpan idleDuration = new TimeSpan(0, 0, 30);
+		HttpContext.Cache.Insert("pageLength", data, null, Cache.NoAbsoluteExpiration, idleDuration);
+		return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+### Creating a File Dependency
+```cs
+//Creating a File Dependency in the CacheController.cs File
+using System.Web.Caching;
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+	
+		public ActionResult Index() {
+			return View((long?)(HttpContext.Cache["pageLength"]));
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result	= await new HttpClient().GetAsync("http://apress.com");
+			long? data = result.Content.Headers.ContentLength;
+			
+			CacheDependency dependency = new CacheDependency(Request.MapPath("~/data.txt"));
+			HttpContext.Cache.Insert("pageLength", data, dependency);
+
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+### Depending on Another Cached Item
+```cs
+//Adding a New Action Method to the CacheController.cs File
+using System.Web.Caching;
+
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		
+		public ActionResult Index() {
+			return View((long?)(HttpContext.Cache["pageLength"]));
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result 	= await new HttpClient().GetAsync("http://apress.com");
+			long? data = result.Content.Headers.ContentLength;
+			CacheDependency dependency = new
+			CacheDependency(Request.MapPath("~/data.txt"));
+			HttpContext.Cache.Insert("pageLength", data, dependency);
+			DateTime timestamp = DateTime.Now;
+			CacheDependency timesStampDependency = new CacheDependency(null, new string[] { "pageLength" });
+			HttpContext.Cache.Insert("pageTimestamp", timestamp, timesStampDependency);
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+### Creating Custom Dependencies
+
+```cs
+//The Contents of the SelfExpiringData.cs File
+
+using System.Web.Caching;
+namespace StateData.Infrastructure {
+	public class SelfExpiringData<T> : CacheDependency {
+		private T dataValue;
+		private int requestCount = 0;
+		private int requestLimit;
+		
+		public T Value {
+			get {
+				if (requestCount++ >= requestLimit) {
+					NotifyDependencyChanged(this, EventArgs.Empty);
+				}
+			return dataValue;
+			}
+		}
+		
+		public SelfExpiringData(T data, int limit) {
+			dataValue = data;
+			requestLimit = limit;
+		}
+	}
+}
+```
+
+```cs
+//Applying the Self-expiring Cache Dependency in the CacheController.cs File
+
+using System.Web.Caching;
+
+using StateData.Infrastructure;
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		public ActionResult Index() {
+			SelfExpiringData<long?> seData = (SelfExpiringData<long?>)HttpContext.Cache["pageLength"];
+			return View(seData == null ? null : seData.Value);
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result 	= await new HttpClient().GetAsync("http://apress.com");
+			long? data = result.Content.Headers.ContentLength;
+			SelfExpiringData<long?> seData = new SelfExpiringData<long?>(data, 3);
+			HttpContext.Cache.Insert("pageLength", seData, seData);
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+```cs
+//Creating an Aggregate Dependency in the CacheController.cs File
+
+namespace StateData.Controllers {
+public class CacheController : Controller {
+	public ActionResult Index() {
+			SelfExpiringData<long?> seData = (SelfExpiringData<long?>)HttpContext.Cache["pageLength"];
+			return View(seData == null ? null : seData.Value);
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result	= await new HttpClient().GetAsync("http://apress.com");
+			
+			long? data = result.Content.Headers.ContentLength;
+			SelfExpiringData<long?> seData = new SelfExpiringData<long?>(data, 3);
+			CacheDependency fileDep = new CacheDependency(Request.MapPath("~/data.txt"));
+			AggregateCacheDependency aggDep = new AggregateCacheDependency();
+			
+			aggDep.Add(seData, fileDep);
+			HttpContext.Cache.Insert("pageLength", seData, aggDep);
+			return RedirectToAction("Index");
+		}
+	}
+}
+```
+
+```cs
+//Receiving Dependency Notifications in the CacheController.cs File
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Web;
+using System.Web.Caching;
+using System.Web.Mvc;
+using StateData.Infrastructure;
+namespace StateData.Controllers {
+	public class CacheController : Controller {
+		public ActionResult Index() {
+			SelfExpiringData<long?> seData = (SelfExpiringData<long?>)HttpContext.Cache["pageLength"];
+			return View(seData == null ? null : seData.Value);
+		}
+		
+		[HttpPost]
+		public async Task<ActionResult> PopulateCache() {
+			HttpResponseMessage result
+			= await new HttpClient().GetAsync("http://apress.com");
+			long? data = result.Content.Headers.ContentLength;
+			SelfExpiringData<long?> seData = new SelfExpiringData<long?>(data, 3);
+			HttpContext.Cache.Insert("pageLength", seData, seData,
+			Cache.NoAbsoluteExpiration, Cache.NoSlidingExpiration,
+			CacheItemPriority.Normal, HandleNotification);
+			return RedirectToAction("Index");
+		}
+		
+		private void HandleNotification(string key, object data,
+			CacheItemRemovedReason reason) {
+			System.Diagnostics.Debug.WriteLine("Item {0} removed. ({1})",
+			key, Enum.GetName(typeof(CacheItemRemovedReason), reason));
+		}
+	}
+}
+```
+
+## Caching Content
+
+```cs
+//Adding Content Caching to the HomeController.cs File
+using ContentCache.Infrastructure;
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+		[OutputCache(Duration = 30, Location = OutputCacheLocation.Downstream)]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Caching at the Server
+
+```cs
+using ContentCache.Infrastructure;
+
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+		[OutputCache(Duration = 30, Location = OutputCacheLocation.Server)]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+
+### Varying Caching Using Headers
+```cs
+//Varying Cached Content Based on Headers in the HomeController.cs File
+using System.Diagnostics;
+using System.Threading;
+using System.Web.Mvc;
+using System.Web.UI;
+using ContentCache.Infrastructure;
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+	[OutputCache(Duration = 30, VaryByHeader="user-agent",
+	Location = OutputCacheLocation.Any)]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Varying Caching Using Form or Query String Data
+```cs
+//Varying Cached Content Based on User Data in the HomeController.cs File
+using System.Diagnostics;
+using System.Threading;
+using System.Web.Mvc;
+using System.Web.UI;
+using ContentCache.Infrastructure;
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+	[OutputCache(Duration = 30, VaryByHeader="user-agent",
+	VaryByParam="name;city", Location = OutputCacheLocation.Any)]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Using a Custom Cache Variation in the HomeController.cs File
+```cs
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+	[OutputCache(Duration = 30,
+	VaryByHeader="user-agent",
+	VaryByParam="name;city",
+	VaryByCustom="mobile",
+	Location = OutputCacheLocation.Any)]
+
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Adding a Custom Cache Variation to the Global.asax.cs File
+```cs
+namespace ContentCache {
+	public class MvcApplication : System.Web.HttpApplication {
+		protected void Application_Start() {
+			AreaRegistration.RegisterAllAreas();
+			RouteConfig.RegisterRoutes(RouteTable.Routes);
+		}
+		
+		public override string GetVaryByCustomString(HttpContext ctx, string custom) {
+			if (custom == "mobile") {
+				return Request.Browser.IsMobileDevice.ToString();
+			} else {
+				return base.GetVaryByCustomString(ctx, custom);
+			}
+		}
+	}
+}
+```
+
+### Creating Cache Profiles in the Web.config File
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+	<system.web>
+		<caching>
+			<outputCacheSettings>
+				<outputCacheProfiles>
+					<add name="cp1" duration="30" location="Any" varyByHeader="user-agent" varyByParam="name;city" varyByCustom="mobile"/>
+				</outputCacheProfiles>
+			</outputCacheSettings>
+		</caching>
+	</system.web>
+</configuration>
+```
+
+### Applying a Cache Profile in the HomeController.cs File
+```cs
+using ContentCache.Infrastructure;
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+	[OutputCache(CacheProfile="cp1")]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Caching Child Action Output
+```cs
+//Adding a Child Action to the HomeController.cs File
+
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+	[OutputCache(CacheProfile = "cp1")]
+		public ActionResult Index() {
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+		
+		[ChildActionOnly]
+		[OutputCache(Duration=60)]
+		public PartialViewResult GetTime() {
+			return PartialView((object)DateTime.Now.ToShortTimeString());
+		}
+	}
+}
+```
+
+### Dynamically Setting Cache Policy
+```cs
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+		public ActionResult Index() {
+			if (Request.RawUrl == "/Home/Index") {
+				Response.Cache.SetNoServerCaching();
+				Response.Cache.SetCacheability(HttpCacheability.NoCache);
+			} else {
+				Response.Cache.SetExpires(DateTime.Now.AddSeconds(30));
+				Response.Cache.SetCacheability(HttpCacheability.Public);
+			}
+			
+			Thread.Sleep(1000);
+			
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+	}
+}
+```
+
+### Validating Cached Content
+```cs
+//Using a Cache Validation Callback to the HomeController.cs File
+namespace ContentCache.Controllers {
+	public class HomeController : Controller {
+
+		public ActionResult Index() {
+			Response.Cache.SetExpires(DateTime.Now.AddSeconds(30));
+			Response.Cache.SetCacheability(HttpCacheability.Server);
+			Response.Cache.AddValidationCallback(CheckCachedItem, Request.UserAgent);
+			Thread.Sleep(1000);
+			int counterValue = AppStateHelper.IncrementAndGet(
+			AppStateKeys.INDEX_COUNTER);
+			Debug.WriteLine(string.Format("INDEX_COUNTER: {0}", counterValue));
+			return View(counterValue);
+		}
+		
+		[ChildActionOnly]
+		[OutputCache(Duration = 60)]
+		public PartialViewResult GetTime() {
+			return PartialView((object)DateTime.Now.ToShortTimeString());
+		}
+		
+		public void CheckCachedItem(HttpContext ctx, object data, 		ref HttpValidationStatus status) {
+			status = data.ToString() == ctx.Request.UserAgent ?	HttpValidationStatus.Valid : HttpValidationStatus.Invalid;
+			Debug.WriteLine("Cache Status: " + status);
+		}
+	}
+}
+```
